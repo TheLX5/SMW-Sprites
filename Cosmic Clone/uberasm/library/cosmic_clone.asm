@@ -37,6 +37,9 @@ if !sa1
 						; clone has to show.
 						; Uses 8 bytes per clone.
 	
+	!cosmic_clones_bank	= $40BFD8	; Has the bank byte for the pointers above.
+						; 1 byte per clone.
+	
 ;########################
 ;# LoROM Defines
 else
@@ -54,6 +57,9 @@ else
 	!cosmic_clones_ptrs	= $7F2000	; Has the pointer to the current graphic that the
 						; clone has to show.
 						; Uses 8 bytes per clone.
+						
+	!cosmic_clones_bank	= $7F2023	; Has the bank byte for the pointers above.
+						; 1 byte per clone.
 endif
 
 ;#################################################
@@ -78,12 +84,12 @@ main:
 	asl 
 	ora $76
 	sta $0B
-	lda $77
-	and #$0C
-	asl 
+	lda $13DB|!addr
+	and #$03
+	asl #3
 	ora $0B
 	sta $0B
-	lda $13DB|!addr
+	lda $13E3|!addr
 	clc
 	and #$07
 	ror #4
@@ -140,8 +146,6 @@ nmi:
 	rep #$20
 	ldx #$80
 	stx $2115
-	ldx #$7E
-	stx $4314
 	lda #$1801
 	sta $4310
 	
@@ -151,6 +155,15 @@ nmi:
 	tax 
 	ldy #$02
 -	
+	phx
+	txa
+	lsr #3
+	tax
+	lda !cosmic_clones_bank,x
+	tax
+	stx $4314
+	plx
+	
 	lda.l .vram_dests,x
 	sta $2116
 	lda.l !cosmic_clones_ptrs,x

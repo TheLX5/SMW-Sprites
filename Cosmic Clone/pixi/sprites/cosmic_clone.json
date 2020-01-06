@@ -54,12 +54,12 @@
   "Type": 1,
   "Extra Property Byte 1": 0,
   "Extra Property Byte 2": 0,
-  "Additional Byte Count (extra bit clear)": 2,
-  "Additional Byte Count (extra bit set)": 2,
+  "Additional Byte Count (extra bit clear)": 3,
+  "Additional Byte Count (extra bit set)": 3,
   "Map16": "",
   "Displays": [
     {
-      "Description": "Cosmic Clone\\nFollows Mario and tries to catch him.\\n\\nExtra Byte 1:\\nDetermines how many frames will the Cosmic Clone be behind the real Mario.\\n\\nExtra Byte 2:\\nEach bit has a different function.\\nFormat: -----ikd\\n   d = Enables Cosmic Marios to disappear upon damaging Mario.\\n   k = Instantly kills Mario instead of just hurting him.\\n   i = Disable any sort of interaction with Mario.\\n   - = Unused.\\n",
+      "Description": "Cosmic Clone\\nFollows Mario and tries to catch him.\\n\\nExtra byte 1: Determines how many frames will the Cosmic Clone be behind the real Mario.\\n\\nExtra byte 2: Each bit has a different function. See the asm file for more information.\\n\\nExtra byte 3: Palette. See the asm file for more information.",
       "ExtraBit": false,
       "Tiles": [
         {

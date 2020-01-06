@@ -1,5 +1,5 @@
 ;##################################################################################################
-;# Cosmic Clones v1.0
+;# Cosmic Clones v1.1
 ;# By lx5
 ;# 
 ;# This sprite creates a Cosmic Clone that follows the same path as Mario followed in the previous
@@ -7,18 +7,17 @@
 ;# 
 ;# Notes:
 ;#	1) The Cosmic Clones can only be delayed by 255 frames.
-;# 	2) Some poses (such as the cape flight poses) are replaced with an generic frame.
+;# 	2) Some poses (such as the cape flight poses) are replaced with a generic frame.
 ;#	3) While they aren't exactly incompatible with Yoshi, they will look weird and they won't
 ;#	   make Mario lose Yoshi on contact.
-;#	4) It's NOT compatible with purple triangles (wall running) AND P-Balloons.
-;# 	5) There's a hard limit of 4 Cosmic Clones on screen due to V-Blank time limitations.
+;# 	4) There's a hard limit of 4 Cosmic Clones on screen due to V-Blank time limitations.
 ;#	   If more than 5 are on screen, there will be graphical issues.
 ;#	   The sprite tries to not process the fifth Cosmic Clone, but it fails at such task.
 ;#	   Might be fixed later.
-;#	6) Cosmic Clones will upload their graphics at 30fps to avoid NMI overflow problems.
-;#	7) If you ever have problem with black bars at the top of the screen, try using less Cosmic
+;#	5) Cosmic Clones will upload their graphics at 30fps to avoid NMI overflow problems.
+;#	6) If you ever have problem with black bars at the top of the screen, try using less Cosmic
 ;#	   Clones at the same time.
-;#	8) For non SA-1 ROMs, you require to use an external patch to make $7FB000 to be free.
+;#	7) For non SA-1 ROMs, you require to use an external patch to make $7F0000 to be free.
 ;#         Unless you're planning to remap the FreeRAM define.
 ;#	   Patch for above: https://www.smwcentral.net/?p=section&a=details&id=19580
 ;#
@@ -29,11 +28,21 @@
 ;# 
 ;# Extra byte 2:
 ;# 	Each bit has a different function.
-;# 	Format: -----ikd
+;# 	Format: p-ts-ikd
 ;# 		d = Enables Cosmic Marios to disappear upon damaging Mario.
 ;#		k = Instantly kills Mario instead of just hurting him.
 ;#		i = Disable any sort of interaction with Mario.
+;#		s = Skip drawing 8x8 tiles.
+;#		t = Skip leaving small clouds after appearing.
+;#		p = Override default palette (F) with Extra Byte 3 info.
 ;# 		- = Unused.
+;#
+;# Extra byte 3:
+;# 	Palette that will be used for the clones if the most significant bit of Extra byte 2 was
+;#	enabled.
+;#	Format: ----ccct
+;#		ccc = CCC bits from YXPPCCCT
+;#		t = T bit from YXPPCCCT
 ;#
 
 ;##################################################################################################
@@ -43,8 +52,17 @@
 ;#################################################
 ;# Cluster Sprites
 
-	!cosmic_smoke_num	= $00
-	!cosmic_smoke_drop_num	= $01
+	!cosmic_smoke_num	= $00		; Cluster sprite number of the big smoke cloud.
+	!cosmic_smoke_drop_num	= $01		; Cluster sprite number of the small smoke cloud.
+
+;#################################################
+;# SFX Customization
+
+	!animation_sfx		= $25		; SFX for the cloud effect.
+	!spawn_sfx		= $10		; SFX for the spawn effect.
+	!shared_sfx_port	= $1DF9		; SFX Port for the sound effect above.
+						; They MUST be in the same port due to how it was
+						; programmed.
 
 ;#################################################
 ;# Data logging
@@ -74,6 +92,9 @@ if !sa1
 	!cosmic_clones_ptrs	= $40BFE0	; Has the pointer to the current graphic that the
 						; clone has to show.
 						; Uses 8 bytes per clone.
+						
+	!cosmic_clones_bank	= $40BFD8	; Has the bank byte for the pointers above.
+						; 1 byte per clone.
 	
 ;########################
 ;# LoROM Defines
@@ -92,30 +113,37 @@ else
 	!cosmic_clones_ptrs	= $7F2000	; Has the pointer to the current graphic that the
 						; clone has to show.
 						; Uses 8 bytes per clone.
+						
+	!cosmic_clones_bank	= $7F2023	; Has the bank byte for the pointers above.
+						; 1 byte per clone.
 endif
 
 ;#################################################
 ;# Internal defines, do not touch.
 
-!buffer_size		= !max_positions*!data_size
+!buffer_size			= !max_positions*!data_size
 
-!sprite_powerup		= !C2
-!sprite_current_pose	= !160E
-!sprite_previous_pose	= !1528
-!sprite_behind_layers	= !1602
-!sprite_direction	= !157C
-!sprite_blocked		= !1588
-!sprite_walking_pose	= !1534
-!sprite_y_image		= !1594
-!sprite_frame_timer	= !151C
-!sprite_cosmic_num	= !1510
+!sprite_powerup			= !C2
+!sprite_current_pose		= !160E
+!sprite_previous_pose		= !1528
+!sprite_behind_layers		= !1602
+!sprite_direction		= !157C
+!sprite_wallrun			= !1588
+!sprite_walking_pose		= !1534
+!sprite_y_image			= !1594
+!sprite_frame_timer		= !151C
+!sprite_cosmic_num		= !1510
 
-!sprite_pal		= !15F6
+!sprite_previous_index_06	= !1570
+!sprite_previous_index_05	= !1504
+!sprite_previous_index_04	= !1FD6
 
-!sprite_x_lo		= !E4
-!sprite_x_hi		= !14E0
-!sprite_y_hi		= !14D4
-!sprite_y_lo		= !D8
+!sprite_pal			= !15F6
+
+!sprite_x_lo			= !E4
+!sprite_x_hi			= !14E0
+!sprite_y_hi			= !14D4
+!sprite_y_lo			= !D8
 
 ;##################################################################################################
 ;# Init routine
@@ -128,11 +156,18 @@ init:
 	plb
 	
 	lda #$01
-	sta $18B8|!addr			; Enables Cluster Sprites processing.
+	sta $18B8|!addr			; Enables processing cluster sprites.
 	
 	lda !extra_byte_1,x
 	sta !1540,x			; Saves the amount of delay frames.
 
+	lda !extra_byte_2,x
+	bpl .default_pal
+	lda !extra_byte_3,x
+	and #$0F
+	sta !sprite_pal,x
+.default_pal
+	
 if !sa1
 	stz $2250
 	sta $2251
@@ -222,7 +257,7 @@ main_rt:
 	
 	lda !1540,x			; If we're still waiting on that delay, spawn smoke clouds
 	bne .draw_clouds		; if not, draw the Cosmic Clone.
-	jsr mario_gfx
+	jsr cosmic_gfx
 	bra .skip_clouds
 .draw_clouds
 	jsr cloud_gfx
@@ -245,15 +280,15 @@ main:
 	beq .running			; to graphics pointer computing.
 	jmp compute_upload
 .clouds	
-	ldy #$10
+	ldy.b #!spawn_sfx
 	cmp #$01
 	beq +
 	lda $14
 	and #$03
 	beq ++
-	ldy #$25
+	ldy.b #!animation_sfx
 +	
-	sty $1DF9|!addr
+	sty.w !shared_sfx_port|!addr
 ++	
 	jmp compute_upload
 	
@@ -264,13 +299,15 @@ main:
 	lda !sprite_current_pose,x	; Keep a record of the previous shown pose.
 	sta !sprite_previous_pose,x
 	
+	lda !extra_byte_2,x
+	and #$20
+	bne +
 	inc !sprite_frame_timer,x	; Spawn small smoke effects in front of the Cosmic Clone.
 	lda !sprite_frame_timer,x
 	and #$03
 	bne +
 	jsr spawn_cloud_drop
 +	
-
 
 ;########################
 ;# Cosmic Clone position update code.
@@ -348,11 +385,11 @@ endif
 	lda $0B
 	lsr #3
 	and #$03
-	sta !sprite_blocked,x
+	sta !sprite_walking_pose,x
 	lda $0B
 	lsr #5
 	and #$07
-	sta !sprite_walking_pose,x
+	sta !sprite_wallrun,x
 	
 	lda $0C				; Updates Y position visual displacement.
 	sta !sprite_y_image,x
@@ -555,9 +592,13 @@ interaction:
 ;#################################################
 ;# Cosmic Clone graphics routine.
 
-mario_gfx:	
-	%GetDrawInfo()				; Calls GetDrawInfo (probably unneeded).
-
+cosmic_gfx:
+	;%GetDrawInfo()
+	lda !sprite_cosmic_num,x
+	tay
+	lda.w .slots-1,y			; Select the appriopiate tiles for this Cosmic
+	sta $0A
+	
 	lda !sprite_behind_layers,x
 	and #$01
 	eor #$01
@@ -568,7 +609,7 @@ mario_gfx:
 +	
 	ora !sprite_pal,x
 	sta $0B
-	
+
 	lda !sprite_x_lo,x
 	sta $0C
 	lda !sprite_x_hi,x
@@ -584,11 +625,33 @@ mario_gfx:
 	sta $03
 	
 	lda !sprite_y_image,x
-	xba
+	sta $09
+	lda !sprite_wallrun,x
+	sta $08
+	
 	lda !sprite_current_pose,x
 	tax
+	
+	lda #$05
+	cmp $08
+	bcs .calc_x_pos
+	lda $08
+	ldy $03
+	beq .no_powerup
+	cpx #$13
+	bne .skip_inv
+.no_powerup
+	eor #$01
+.skip_inv
+	lsr
+.calc_x_pos
 	rep #$20
-	xba
+	lda $0C
+	sbc $1A
+	sta $00
+	
+.calc_y_pos
+	lda $09
 	and #$00FF
 	clc
 	adc $0E
@@ -612,51 +675,65 @@ mario_gfx:
 	adc #$0002
 	sta $02					; Saves the Y position within the camera of the
 	sep #$20				; Cosmic Clone.
-
+	
 	ldx $15E9|!addr
 	ldy !15EA,x
-	
-	lda $00
-	sta $0300|!addr,y			; Writes X position within the camera.
-	sta $0304|!addr,y
-
-	lda $02
-	sta $0305|!addr,y			; Writes Y position within the camera.
-	sec
-	sbc #$10
-	sta $0301|!addr,y
-	
-	lda !sprite_cosmic_num,x
-	tax
-	lda.w .slots-1,x			; Select the appriopiate tiles for this Cosmic
-	sta $0302|!addr,y			; Clone.
-	clc
-	adc #$02
-	sta $0306|!addr,y
 
 	lda $0B
-	sta $0303|!addr,y			; Writes YXPPCCCT settings.
+	sta $0303|!addr,y
 	sta $0307|!addr,y
+	sta $030F|!addr,y			; Sets up Cosmic Clone's YXPPCCCT props before 
+	ldx $04					; everything else.
+	cpx #$E8
+	bne .dont_flip				; Also hardcodes P-Balloon workaround.
+	eor #$40
+.dont_flip
+	sta $030B|!addr,y
+
+	ldx $15E9|!addr
+	lda !sprite_previous_pose,x
+	cmp !sprite_current_pose,x		; If the pose is the same as the previous one,
+	beq .skip_remap				; show the 8x8 tile.
 	
-	tya
-	clc
-	adc #$08				; Shifts the OAM index by 8 bytes.
-	tay
-	
-	lda $05
-	clc
-	adc #$04				; Requeriments for the routine below.
+	lda $14
+	and #$01
+	sta $09
+	lda !sprite_cosmic_num,x
+	and #$01				; Remap if the tile doesn't match Cosmic Clone's 
+	eor $09					; GFX update rate (30fps).
+	bne .skip_remap
+.use_previous_tile
+	lda !sprite_previous_index_06,x
+	sta $06
+	lda !sprite_previous_index_05,x
 	sta $05
-	inc $06
-	inc $06
+	lda !sprite_previous_index_04,x
+	sta $04
+	beq .begin_draw
+.skip_remap
+		
+	lda $06
+	sta !sprite_previous_index_06,x
+	lda $05
+	sta !sprite_previous_index_05,x
+	lda $04
+	sta !sprite_previous_index_04,x
 	
-	jsr .sub				; These two draws Cosmic Clone's 8x8 tiles.
-	jsr .sub
+.begin_draw
+	jsr draw_cosmic_tile			; These two draws Cosmic Clone's 8x8 tiles.
+	jsr draw_cosmic_tile
 	
 	ldx $15E9|!addr
-	ldy #$02				; Let SMW handle Mario's 16x16 tiles.
-	lda #$01
-	jsl $01B7B3|!bank
+	lda !extra_byte_2,x
+	and #$10
+	bne .skip_small_tiles
+	
+	jsr draw_cosmic_tile
+	jsr draw_cosmic_tile
+	
+.skip_small_tiles
+	
+	ldx $15E9|!addr
 	rts
 
 .slots
@@ -669,72 +746,238 @@ mario_gfx:
 ;# Draws 8x8 tiles for Cosmic Clones.
 ;# Taken from SMW. Gonna skip most comments for this one.
 
-.sub	
-	lda !sprite_previous_pose,x
-	cmp !sprite_current_pose,x		; If the pose is the same as the previous one,
-	beq ..process				; show the 8x8 tile.
-	
-	lda $14
-	and #$01
-	sta $00
-	lda !sprite_cosmic_num,x
-	and #$01				; Skip if the 8x8 tile doesn't match Cosmic Clone's 
-	eor $00					; GFX update rate (30fps).
-	beq ..finish_drawing
-..process	
-
+draw_cosmic_tile:
 	ldx $06
-	lda.l $00DFDA,x
-	bmi ..finish_drawing
+	lda.w cosmic_tiles,x
+	cmp #$80
+	beq .finish_drawing
+	cmp #$00
+	beq .fix_tile
+	cmp #$02
+	bne .dont_fix
+.fix_tile
+	clc
+	adc $0A
+.dont_fix
 	sta $0302|!addr,y
-	lda $02FF|!addr,y
-	and #$FE
-	sta $0303|!addr,y
+	
 	ldx $05
 	rep #$20
 	lda $02
+	sec
 	sbc #$0011
 	clc
-	adc.l $00DE32,x
+	adc.w cosmic_y_disp,x
 	pha
 	clc
 	adc #$0010
 	cmp #$0100
 	pla
 	sep #$20
-	bcs ..finish_drawing
+	bcs .finish_drawing
 	sta $0301|!addr,y
 	
 	rep #$20
-	lda $0C
-	sec
-	sbc $1A
+	lda $00
 	clc
-	adc.l $00DD4E,x
+	adc.w cosmic_x_disp,x
 	pha
 	clc
 	adc #$0080
 	cmp #$0200
 	pla
 	sep #$20
-	bcs ..finish_drawing
+	bcs .finish_drawing
 	sta $0300|!addr,y
 	xba
 	lsr
-..finish_drawing	
+.finish_drawing	
 	php
 	tya
 	lsr #2
 	tax
+	asl $04
+	rol
 	plp
 	rol
-	and #$01
+	and #$03
 	sta $0460|!addr,x
 	iny #4
 	inc $05
 	inc $05
 	inc $06
 	rts
+
+cosmic_tiles:				; Same format as $00DF1A
+	db $00,$02,$80,$80
+	db $00,$02,$C2,$80
+	db $00,$02,$D0,$D1
+	db $00,$02,$C3,$80
+	db $00,$02,$C6,$C7
+	db $00,$02,$D6,$D7
+	db $00,$02,$C0,$C1
+	db $00,$02,$D4,$D5
+	db $00,$02,$C4,$C5
+	db $00,$02,$D2,$80
+	db $00,$02,$02,$80
+	db $04,$D3,$C8,$D9,$C9,$D8
+
+cosmic_x_disp:				; Same format as $00DD4E
+	db $00,$00,$00,$00,$10,$00,$10,$00
+	db $00,$00,$00,$00,$F8,$FF,$F8,$FF
+	db $0E,$00,$06,$00,$F2,$FF,$FA,$FF
+	db $17,$00,$07,$00,$0F,$00,$EA,$FF
+	db $FA,$FF,$FA,$FF,$00,$00,$00,$00
+	db $00,$00,$00,$00,$10,$00,$10,$00
+	db $00,$00,$00,$00,$F8,$FF,$F8,$FF
+	db $00,$00,$F8,$FF,$08,$00,$00,$00
+	db $08,$00,$F8,$FF,$00,$00,$00,$00
+	db $F8,$FF,$00,$00,$00,$00,$10,$00
+	db $02,$00,$00,$00,$FE,$FF,$00,$00
+	db $00,$00,$00,$00,$FC,$FF,$05,$00
+	db $04,$00,$FB,$FF,$FB,$FF,$06,$00
+	db $05,$00,$FA,$FF,$F9,$FF,$09,$00
+	db $07,$00,$F7,$FF,$FD,$FF,$FD,$FF
+	db $03,$00,$03,$00,$FF,$FF,$07,$00
+	db $01,$00,$F9,$FF,$0A,$00,$F6,$FF
+	db $08,$00,$F8,$FF,$08,$00,$F8,$FF
+	db $00,$00,$04,$00,$FC,$FF,$FE,$FF
+	db $02,$00,$0B,$00,$F5,$FF,$14,$00
+	db $EC,$FF,$0E,$00,$F3,$FF,$08,$00
+	db $F8,$FF,$0C,$00,$14,$00,$FD,$FF
+	db $F4,$FF,$F4,$FF,$0B,$00,$0B,$00
+	db $03,$00,$13,$00,$F5,$FF,$05,$00
+	db $F5,$FF,$09,$00,$01,$00,$01,$00
+	db $F7,$FF,$07,$00,$07,$00,$05,$00
+	db $0D,$00,$0D,$00,$FB,$FF,$FB,$FF
+	db $FB,$FF,$FF,$FF,$0F,$00,$01,$00
+	db $F9,$FF,$00,$00
+
+cosmic_y_disp:				; Same format as $00DE32
+	db $01,$00,$11,$00,$11,$00,$19,$00
+	db $01,$00,$11,$00,$11,$00,$19,$00
+	db $0C,$00,$14,$00,$0C,$00,$14,$00
+	db $18,$00,$18,$00,$28,$00,$18,$00
+	db $18,$00,$28,$00,$06,$00,$16,$00
+	db $01,$00,$11,$00,$09,$00,$11,$00
+	db $01,$00,$11,$00,$09,$00,$11,$00
+	db $01,$00,$11,$00,$11,$00,$01,$00
+	db $11,$00,$11,$00,$01,$00,$11,$00
+	db $11,$00,$01,$00,$11,$00,$11,$00
+	db $01,$00,$11,$00,$01,$00,$11,$00
+	db $11,$00,$05,$00,$04,$00,$14,$00
+	db $04,$00,$14,$00,$0C,$00,$14,$00
+	db $0C,$00,$14,$00,$10,$00,$10,$00
+	db $10,$00,$10,$00,$10,$00,$00,$00
+	db $10,$00,$00,$00,$10,$00,$00,$00
+	db $10,$00,$00,$00,$0B,$00,$0B,$00
+	db $11,$00,$11,$00,$FF,$FF,$FF,$FF
+	db $10,$00,$10,$00,$10,$00,$10,$00
+	db $10,$00,$10,$00,$10,$00,$15,$00
+	db $15,$00,$25,$00,$25,$00,$04,$00
+	db $04,$00,$04,$00,$14,$00,$14,$00
+	db $04,$00,$14,$00,$14,$00,$04,$00
+	db $04,$00,$14,$00,$04,$00,$04,$00
+	db $14,$00,$00,$00,$08,$00,$00,$00
+	db $00,$00,$08,$00,$00,$00,$00,$00
+	db $10,$00,$18,$00,$00,$00,$10,$00
+	db $18,$00,$00,$00,$10,$00,$00,$00
+	db $10,$00,$F8,$FF
+
+cosmic_top_tilemap:			; Same format as $00E00C
+	db $50,$50,$50,$09,$50,$50,$50,$50
+	db $50,$50,$09,$2B,$50,$2D,$50,$D5
+	db $2E,$C4,$C4,$C4,$D6,$B6,$50,$50
+	db $50,$50,$50,$50,$50,$C5,$D7,$2A
+	db $E0,$50,$D5,$29,$2C,$B6,$D6,$28
+	db $E0,$E0,$C5,$C5,$C5,$C5,$C5,$C5
+	db $5C,$5C,$50,$5A,$B6,$50,$28,$28
+	db $C5,$D7,$28,$70,$C5,$70,$1C,$93
+	db $C5,$C5,$0B,$85,$90,$84,$70,$70
+	db $70,$A0,$70,$70,$70,$70,$70,$70
+	db $A0,$74,$70,$80,$70,$84,$17,$A4
+	db $A4,$A4,$B3,$B0,$70,$70,$70,$70
+	db $70,$70,$70,$E2,$72,$0F,$61,$70
+	db $63,$82,$C7,$90,$B3,$D4,$A5,$C0
+	db $08,$54,$0C,$0E,$1B,$51,$49,$4A
+	db $48,$4B,$4C,$5D,$5E,$5F,$E3,$90
+	db $5F,$5F,$C5,$70,$70,$70,$A0,$70
+	db $70,$70,$70,$70,$70,$A0,$74,$70
+	db $80,$70,$84,$17,$A4,$A4,$A4,$B3
+	db $B0,$70,$70,$70,$70,$70,$70,$70
+	db $E2,$72,$0F,$61,$70,$63,$82,$C7
+	db $90,$B3,$D4,$A5,$C0,$08,$64,$0C
+	db $0E,$1B,$51,$49,$4A,$48,$4B,$4C
+	db $5D,$5E,$5F,$E3,$90,$5F,$5F,$C5
+
+cosmic_bottom_tilemap:			; Same format as $00E0CC
+	db $71,$60,$60,$19,$94,$96,$96,$A2
+	db $97,$97,$18,$3B,$B4,$3D,$A7,$E5
+	db $2F,$D3,$C3,$C3,$F6,$D0,$B1,$81
+	db $B2,$86,$B4,$87,$A6,$D1,$F7,$3A
+	db $F0,$F4,$F5,$39,$3C,$C6,$E6,$38
+	db $F1,$F0,$C5,$C5,$C5,$C5,$C5,$C5
+	db $6C,$4D,$71,$6A,$6B,$60,$38,$F1
+	db $5B,$69,$F1,$F1,$4E,$E1,$1D,$A3
+	db $C5,$C5,$1A,$95,$10,$07,$02,$01
+	db $00,$02,$14,$13,$12,$30,$27,$26
+	db $30,$03,$15,$04,$31,$07,$E7,$25
+	db $24,$23,$62,$36,$33,$91,$34,$92
+	db $35,$A1,$32,$F2,$73,$1F,$C0,$C1
+	db $C2,$83,$D2,$10,$B7,$E4,$B5,$61
+	db $0A,$55,$0D,$75,$77,$1E,$59,$59
+	db $58,$02,$02,$6D,$6E,$6F,$F3,$68
+	db $6F,$6F,$06,$02,$01,$00,$02,$14
+	db $13,$12,$30,$27,$26,$30,$03,$15
+	db $04,$31,$07,$E7,$25,$24,$23,$62
+	db $36,$33,$91,$34,$92,$35,$A1,$32
+	db $F2,$73,$1F,$C0,$C1,$C2,$83,$D2
+	db $10,$B7,$E4,$B5,$61,$0A,$55,$0D
+	db $75,$77,$1E,$59,$59,$58,$02,$02
+	db $6D,$6E,$6F,$F3,$68,$6F,$6F,$06
+
+cosmic_tilemap_expansion:		; Same format as $00DF1A
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$28,$00,$00,$00,$00
+	db $00,$00,$04,$04,$04,$00,$00,$00
+	db $00,$00,$08,$00,$00,$00,$00,$0C
+	db $0C,$0C,$00,$00,$10,$10,$14,$14
+	db $18,$18,$00,$00,$1C,$00,$00,$00
+	db $00,$20,$00,$00,$00,$00,$24,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$04
+	db $04,$04,$00,$00,$00,$00,$00,$08
+	db $00,$00,$00,$00,$0C,$0C,$0C,$00
+	db $00,$10,$10,$14,$14,$18,$18,$00
+	db $00,$1C,$00,$00,$00,$00,$20,$00
+	db $00,$00,$00,$24,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+
+cosmic_disp_selector:			; Same format as $00DCEC
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $02,$04,$04,$04,$0E,$08,$00,$00
+	db $00,$00,$00,$00,$00,$00,$08,$08
+	db $08,$08,$08,$08,$00,$00,$00,$00
+	db $0C,$10,$12,$14,$16,$18,$1A,$00
+	db $00,$00,$00,$00,$00,$00,$00,$00
+	db $00,$00,$00,$00,$00,$06,$00,$00
+	db $00,$00,$00,$0A,$00,$00
+
+cosmic_disp_indexes:			; Same format as $00DD32
+	db $00,$08,$10,$14,$18,$1E,$24,$24
+	db $28,$30,$38,$3E,$44,$4A,$50,$54
+	db $58,$58,$5C,$60,$64,$68,$6C,$70
+	db $74,$78,$7C,$80
 
 ;#################################################
 ;# Spawn clouds routine.
@@ -841,12 +1084,12 @@ compute_upload:
 +	
 	txy
 	tax 
-	lda.l $00E00C,x
+	lda.w cosmic_top_tilemap,x
 	sta $0A
-	lda.l $00E0CC,x
+	lda.w cosmic_bottom_tilemap,x
 	sta $0B
 	
-	lda.l $00DF1A,x
+	lda.w cosmic_tilemap_expansion,x
 	sta $06
 	ldx $00
 	lda #$C8
@@ -861,11 +1104,13 @@ compute_upload:
 	bne +
 	ldx #$20
 +	
-	lda.l $00DCEC,x
+	lda.w cosmic_disp_selector,x
 	ora $02
 	tax
-	lda.l $00DD32,x
+	lda.w cosmic_disp_indexes,x
 	sta $05
+
+
 	
 	lda !sprite_cosmic_num,y
 	dec
@@ -883,7 +1128,7 @@ compute_upload:
 	and #$F700
 	ror
 	lsr
-	adc #$2000
+	adc.w #cosmic_clone_gfx
 	sta.l !cosmic_clones_ptrs+$00,x
 	clc
 	adc #$0200
@@ -898,14 +1143,24 @@ compute_upload:
 	and #$F700
 	ror
 	lsr
-	adc #$2000
+	adc.w #cosmic_clone_gfx
 	sta.l !cosmic_clones_ptrs+$04,x
 	clc
 	adc #$0200
 	sta.l !cosmic_clones_ptrs+$06,x
 	sep #$20
+	
+	txa
+	lsr #3
+	tax
+	lda.b #cosmic_clone_gfx/$10000
+	sta !cosmic_clones_bank,x
+
 	ldx $15E9|!addr
 	rts
 
 .powerup_disp
 	db $00,$46,$83,$46
+
+cosmic_clone_gfx:
+	incbin cosmic_clone.bin
