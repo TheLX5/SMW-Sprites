@@ -7,11 +7,8 @@
 ;#
 ;# NOTES:
 ;# - THIS SPRITE ONLY WORKS ON SA-1.
-;# - This sprite doesn't work with slopes! Mario goes through them.
-;# - It fails to detect moving layer 2 and layer 3 smashers as well.
+;# - It fails to detect Layer 3 smashers.
 ;# - It doesn't work with solid sprites, however, it does work with platforms passable from below.
-;# - Mario is able to carry sprite while in this form. It allows some interesting situations so I
-;#   didn't bother fixing that.
 ;# - Mario is NOT able to carry the powerup to another level or sublevel. The sprite will despawn
 ;#   the very moment Mario is not under the player's control.
 ;# - The sprite makes use of SA-1's Background Mode in order to rotate its graphics and uses
@@ -22,8 +19,17 @@
 ;################################################
 ;# Customization
 
+!yes			= 1			; Do not touch.
+!no			= 0			; Do not touch.
+
 ;#######################
 ;# Constants
+
+!carry_items		= !no			; Allow Mario to carry sprites while being inflated
+!mute_sfx 		= !yes			; Mute any SFX usually made by Mario (i.e. jump)
+!scroll_camera		= !yes			; Fixes the camera on Mario when he's inflated
+!debug_show_target	= !no			; DEBUG: Shows the target that Mario follows when
+						; he is inflated.
 
 !max_slow_speed 	= $08			; Maximum speed when using ONLY the D-Pad
 !max_fast_speed 	= $24			; Maximum speed when using ABXY
@@ -59,6 +65,8 @@
 !processed_angle	= $6005			; Angle being processed. Used by the smoke particles.
 !in_balloon		= $6006			; Balloon state.
 !balloon_grab		= $6007			; Has a ballon been grabbed in the level.
+!graphics_done		= $31EF
+!graphics_init		= $31F0
 
 !dest_bwram		= $402000		; It may not be a good idea to change this one
 !dest_virtual_ram	= $604000		; It may not be a good idea to change this one
@@ -78,6 +86,7 @@ print "INIT ",pc
 +	
 	stz !in_balloon
 +	
+.copy_frames
 	phb
 	phk
 	plb
@@ -88,7 +97,7 @@ print "INIT ",pc
 	sta $01
 	ldx #$00
 	rep #$20
-.decompress_frames
+.loop	
 	ldy.b #%11000100
 	sty $2230
 	lda.w .frames,x
@@ -112,7 +121,7 @@ print "INIT ",pc
 	sty $2230
 	inx #3
 	cpx #$07
-	bcc .decompress_frames
+	bcc .loop
 
 	sep #$20
 	ldx $15E9|!addr
@@ -169,7 +178,13 @@ item_main:
 	jsl $018022
 	
 	jsl $01A7DC
-	bcc .no_contact
+	bcs .contact
+.no_contact
+	rts
+.inflated_mario_exists
+	stz !14C8,x
+	rts
+.contact
 	lda #$1E
 	sta $1DF9|!addr
 	lda !in_balloon
@@ -177,7 +192,8 @@ item_main:
 	lda #$01
 	sta !in_balloon
 	sta !balloon_grab
-	sta !157C,x
+	stz !graphics_init
+	stz !graphics_done
 	stz !angle
 	stz !speed
 	stz !previous_angle
@@ -185,29 +201,55 @@ item_main:
 	stz !scale+1
 	lda #$01
 	sta $19
-	lda !E4,x
+	
+	lda !7FAB9E,x
+	sta $01
+	txy
+	ldx #$00
+-	
+	lda !14C8,x
+	beq +
+	inx
+	cpx #!SprSize
+	bcc -
+	ldx #$00
++	
+	lda !9E,y
+	sta !9E,x
+	lda $01
+	pha
+	jsl $07F7D2
+	pla
+	sta !7FAB9E,x
+	jsl $0187A7
+	lda #$08
+	sta !7FAB10,x
+	lda #$08
+	sta !14C8,x
+	ldy $15E9|!addr
+	lda !E4,y
 	sec
 	sbc #$08
 	sta !E4,x
-	lda !14E0,x
+	lda !14E0,y
 	sbc #$00
 	sta !14E0,x
-	lda !D8,x
+	lda !D8,y
 	sec
 	sbc #$10
 	sta !D8,x
-	lda !14D4,x
+	lda !14D4,y
 	sbc #$00
 	sta !14D4,x
+	lda #$01
+	sta !157C,x
 	jsr mario_movements_setup_mario
-.no_contact
-	rts
-.inflated_mario_exists
+	ldx $15E9|!addr
 	stz !14C8,x
 	rts
 
 .wave	
-	db $00,$03,$08,$03,$00,$FD,$F8,$FD
+	db $00,$02,$06,$02,$00,$FE,$FA,$FE
 
 .graphics
 	%GetDrawInfo()
@@ -268,6 +310,13 @@ zoom_vals:
 	dw $00F9
 	dw $00F0
 	dw $00F9
+
+muted_1df9:
+	db $0E,$2B
+.end	
+muted_1dfc:
+	db $04,$13,$35
+.end
 
 mario_movements:
 .rotate_balloon
@@ -381,6 +430,22 @@ mario_movements:
 	inc
 ..done	
 	sta !AA,x
+
+.copy_player_pos
+	lda $94
+	sec
+	sbc #$08
+	sta !E4,x
+	lda $95
+	sbc #$00
+	sta !14E0,x
+	lda $96
+	clc
+	adc #$08
+	sta !D8,x
+	lda $97
+	adc #$00
+	sta !14D4,x
 	
 .blocked
 ..check_right
@@ -390,7 +455,16 @@ mario_movements:
 	lda !B6,x
 	beq ...nope
 	bmi ...nope
+	lda !speed
+	cmp.b #!max_slow_speed
+	bcs ...bonk
 	stz !B6,x
+	bra ...nope
+...bonk	
+	lda !B6,x
+	eor #$FF
+	inc
+	sta !B6,x
 ...nope
 ..check_left
 	lda $77
@@ -398,7 +472,16 @@ mario_movements:
 	beq ...nope
 	lda !B6,x
 	bpl ...nope
+	lda !speed
+	cmp.b #!max_slow_speed
+	bcs ...bonk
 	stz !B6,x
+	bra ...nope
+...bonk	
+	lda !B6,x
+	eor #$FF
+	inc
+	sta !B6,x
 ...nope	
 ..check_down
 	lda $77
@@ -407,7 +490,16 @@ mario_movements:
 	lda !AA,x
 	beq ...nope
 	bmi ...nope
+	lda !speed
+	cmp.b #!max_slow_speed
+	bcs ...bonk
 	stz !AA,x
+	bra ...nope
+...bonk	
+	lda !AA,x
+	eor #$FF
+	inc
+	sta !AA,x
 ...nope
 ..check_up
 	lda $77
@@ -415,9 +507,19 @@ mario_movements:
 	beq ...nope
 	lda !AA,x
 	bpl ...nope
+	lda !speed
+	cmp.b #!max_slow_speed
+	bcs ...bonk
 	stz !AA,x
+	bra ...nope
+...bonk	
+	lda !AA,x
+	eor #$FF
+	inc
+	sta !AA,x
 ...nope
 	
+.update_sprite_speed
 	jsl $01801A
 	jsl $018022
 	
@@ -446,11 +548,43 @@ mario_movements:
 	stz $74
 	lda #$0B
 	sta $72
+if !mute_sfx == 1
+	ldy.b #muted_1df9_end-muted_1df9-1
+	lda $1DF9|!addr
+-	
+	cmp.w muted_1df9,y
+	beq ..mute_1df9
+	dey 
+	bpl -
+	bra +
+..mute_1df9
+	stz $1DF9|!addr
++	
+	ldy.b #muted_1dfc_end-muted_1dfc-1
+	lda $1DFC|!addr
+-	
+	cmp.w muted_1dfc,y
+	beq ..mute_1dfc
+	dey 
+	bpl -
+	bra +
+..mute_1dfc
+	stz $1DFC|!addr
++
+endif
+if !carry_items == 0
+	sta $148F|!addr
+	sta $1470|!addr
+else	
 	stz $148F|!addr
 	stz $1470|!addr
+endif	
+if !scroll_camera == 1
 	lda #$80
 	sta $1406|!addr
+endif
 	rts 
+
 
 calculate_target:
 	sta !processed_angle
@@ -472,7 +606,13 @@ calculate_target:
 	rts
 	
 mario_graphics:
+	lda !graphics_init
+	beq .gfx_not_initialized
 	jsr .draw_inflated_player
+if !debug_show_target == 1
+	jsr .draw_target
+endif
+.gfx_not_initialized
 	inc !151C,x
 	lda !speed
 	beq .idle_mario
@@ -546,7 +686,7 @@ mario_graphics:
 	sta $318B
 
 .setup_cc_dma
-	lda $31EF
+	lda !graphics_done
 	bne .end
 	lda $317F
 	cmp #$07
@@ -591,7 +731,7 @@ mario_graphics:
 	adc #$04
 	sta $317F
 	lda #$01
-	sta $31EF
+	sta !graphics_done
 .end	
 	ldx $15E9|!addr
 	rts
@@ -630,10 +770,51 @@ mario_graphics:
 	sta $0307|!addr,y
 	sta $030B|!addr,y
 	sta $030F|!addr,y
+if !debug_show_target == 0
 	ldy #$02
 	lda #$03
 	jsl $01B7B3
+endif	
 	rts
+
+if !debug_show_target == 1
+.draw_target
+	phy
+	pei ($00)
+	lda !processed_angle
+	pha
+	clc
+	adc #$80
+	ldy #$20
+	jsr calculate_target
+	pla 
+	sta !processed_angle
+	pla
+	clc
+	adc $07
+	adc #$08
+	sta $00
+	pla
+	clc
+	adc $09
+	clc
+	adc #$08
+	sta $01
+	ply
+	lda $00
+	sta $0310|!addr,y
+	lda $01
+	sta $0311|!addr,y
+	lda.b #!item_tile
+	sta $0312|!addr,y
+	lda !15F6,x
+	ora $64
+	sta $0313|!addr,y
+	ldy #$02
+	lda #$04
+	jsl $01B7B3
+	rts
+endif	
 
 ;################################################
 ;# Sets up Background Mode for rotating graphics
@@ -648,7 +829,7 @@ parallel_rotate_gfx:
 	beq .end
 	lda $3071
 	bne .end
-	lda $EF
+	lda.b !graphics_done
 	beq .loop
 	lda.b #!dest_virtual_ram
 	sta $14
@@ -668,7 +849,9 @@ parallel_rotate_gfx:
 	lda.w .offsets+2,x
 	sta $19
 	jsr SUB_ROTATE
-	stz $EF
+	stz.b !graphics_done
+	lda #$01
+	sta.b !graphics_init
 	bra .loop
 .end	
 	plb
